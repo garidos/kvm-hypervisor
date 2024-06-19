@@ -12,6 +12,7 @@ void print_usage() {
     fprintf(stderr, "   -m, --memory    <2|4|8>         (required) Value represents size in MB.\n");
     fprintf(stderr, "   -p, --page      <2|4>           (required) Value is either 2MB or 4KB.\n");
     fprintf(stderr, "   -g, --guest     <guest-images>  (required)\n");
+    fprintf(stderr, "   -f, --file      <shared-files>  (non-required)\n");
     fprintf(stderr, "   -h, --help\n");
 }
 
@@ -29,7 +30,7 @@ int main(int argc, char **argv) {
           {"memory", required_argument, 0, 'm'},
           {"page", required_argument, 0, 'p'},
           {"guest", no_argument, 0, 'g'},
-          {"file", required_argument, 0, 'f'},
+          {"file", no_argument, 0, 'f'},
           {"help", no_argument, 0, 'h'},
           {0, 0, 0, 0}
         };
@@ -141,7 +142,6 @@ int main(int argc, char **argv) {
         args[i].files = &argv[f_start_ind];
         args[i].id = i;
         pthread_create(&vm_threads[i], NULL, make_vm, &args[i]);
-        //make_vm(mem_size, page_size, argv[i]);
     }
 
     for ( int i = 0; i < g_num; i++) {

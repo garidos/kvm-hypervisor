@@ -2,8 +2,15 @@
 #define STRUCTS_H
 
 #include <stdint.h>
+#include <string.h>
 
-#define BUFF_SZ 1024
+#define TERM_PORT   0xe9
+#define FILE_PORT   0x278
+
+#define BUFF_SZ     2048
+
+#define GET_VM_FILE_PATH(buffer, dir, fname) 	strcpy(buffer, dir); \
+											 	strcat(buffer, fname);
 
 #define PML4_ENTRY(addr)	(( addr >> 39 ) & ENTRY_MASK)
 #define PDPT_ENTRY(addr)	(( addr >> 30 ) & ENTRY_MASK)
@@ -14,6 +21,9 @@
 
 #define FETCH_IO_DATA_U32   (*(uint32_t*)( (uint8_t*)vm.kvm_run + vm.kvm_run->io.data_offset ))
 #define FETCH_IO_DATA_U8    (*( (uint8_t*)vm.kvm_run + vm.kvm_run->io.data_offset ))
+
+#define STORE_IO_DATA_U8(value)     (*((uint8_t*)vm.kvm_run + vm.kvm_run->io.data_offset) = value)
+
 #define VM_MEM_AT(vaddr)    (vm.mem + (uint64_t)vaddr)
 
 #define ENTRY_MASK              0x1FF
@@ -52,6 +62,11 @@ struct vm {
 	struct kvm_run *kvm_run;
 };
 
+struct shared_file_info {
+	int original_fd;
+	int copy_fd;	
+	int open_flags;
+};
 
 /*  Structures and constants needed for working with files  */
 
@@ -77,10 +92,10 @@ struct vm {
 #ifndef SEEK_SET
 # define SEEK_SET	0	
 #endif
-#ifndef SEEK_SET
+#ifndef SEEK_CUR
 # define SEEK_CUR	1
 #endif
-#ifndef SEEK_SET	
+#ifndef SEEK_END	
 # define SEEK_END	2
 #endif
 

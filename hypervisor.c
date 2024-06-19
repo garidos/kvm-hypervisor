@@ -10,52 +10,53 @@
 #include <stdint.h>
 #include <linux/kvm.h>
 #include <math.h>
+#include <stdbool.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <linux/limits.h>
 #include "hypervisor.h"
 
 
 
-ssize_t copy_file(const char* from, const char* to)
-{
+ssize_t copy_file(int fd_from, int fd_to) {
 
     char* buffer = malloc(BUFF_SZ);
     if (NULL == buffer) {
         return 0;
     }
 
-
-	int fd_to = open(to, O_WRONLY | O_CREAT, 0777);
-    if (fd_to < 0) {
-        free(buffer);
-        return 0;
-    }
-
-    int fd_from = open(from, O_RDONLY);
-	// Original file didn't exist, so all we had to do is create an empty local copy
-	if ( fd_from < 0 ) {
-		free(buffer);
-		close(fd_to);
-		return 1;
-	}
-
     ssize_t size = 0;
     while(1) {
         int read_sz = read(fd_from, buffer, BUFF_SZ);
         if (read_sz) {
             if (read_sz != write(fd_to, buffer, read_sz)) {
-                close(fd_from);
-                close(fd_to);
                 free(buffer);
-                remove(to);
                 return 0;
             }
         } else break;
         size += read_sz;
     }
 
-    close(fd_to);
-    close(fd_from);
     free(buffer);
     return (size == 0 ? 1 : size); 
+}
+
+void extract_file_name(const char* path, char* buffer) {
+	// Removes path and extension if they exist
+    int p1 = -1, p2 = -1, i = 0;
+    for (; path[i]; i++ ) {
+        // Save indices last occurances of '/' and '.'
+        if ( path[i] == '/' ) p1 = i;
+        else if ( path[i] == '.' ) p2 = i;
+    }
+
+	if ( p2 < p1 ) p2 = i;  
+
+    for ( int i = 0; i < p2 - p1 - 1; i++) {
+        buffer[i] = path[p1 + i + 1];
+    }
+
+    buffer[p2 - p1 - 1] = '\0';
 }
 
 int init_vm(struct vm *vm, size_t mem_size)
@@ -238,6 +239,7 @@ void* make_vm(void* arg)
 	int ret = 0;
 	FILE* img;
 	struct vm_args args = *(struct vm_args*)arg;
+	char full_path[PATH_MAX];
 
 	if (init_vm(&vm, args.mem_sz)) {
 		printf("VM %d: Failed to init the VM\n", args.id);
@@ -279,6 +281,34 @@ void* make_vm(void* arg)
   	}
   	fclose(img);
 
+	struct shared_file_info sf_info[args.file_cnt];
+	for (int i = 0; i < args.file_cnt; i++) {
+		sf_info[i].copy_fd = sf_info[i].original_fd = -1;
+	}
+
+
+	// Make a file system directory if one doesn't exist
+	// since vm image names should be unique, they are used to name fs directories
+	char fs_dir[NAME_MAX + 1];	// + 1 for '/'
+	extract_file_name(args.guest_image, fs_dir);
+
+	// Vm image file has to have .img extension, so we know that there will be enough space for _fs extension(it will be <= NAME_MAX)
+	strcat(fs_dir, "_FS");
+
+	DIR* dir = opendir(fs_dir);
+	if ( dir == NULL && errno == ENOENT ) {
+		// Directory doesnt exist so we make it
+		mkdir(fs_dir, 0775);
+	} else if ( dir == NULL) {
+		perror("VM %d: Error while making a file system directory");
+		return (void*)-1;
+	} else {
+		closedir(dir);
+	}
+
+	// Since directory name will only be used when accessing non shared files, we append '/' at the end so we can easily concat file names with it
+	strcat(fs_dir, "/");
+
 	while(stop == 0) {
 		ret = ioctl(vm.vcpu_fd, KVM_RUN, 0);
 		if (ret == -1) {
@@ -288,71 +318,151 @@ void* make_vm(void* arg)
 
 		switch (vm.kvm_run->exit_reason) {
 			case KVM_EXIT_IO:
-				if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.size == 1 && vm.kvm_run->io.port == 0xE9) {
+				if (vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.size == 1 && vm.kvm_run->io.port == TERM_PORT) {
 					char *p = (char *)vm.kvm_run;
 					//putchar(*(p + vm.kvm_run->io.data_offset));
-					printf("VM %d: IO port: %x, data: %d char: %c\n", args.id, vm.kvm_run->io.port, FETCH_IO_DATA_U8, FETCH_IO_DATA_U8);
-				} else if ( vm.kvm_run->io.direction == KVM_EXIT_IO_IN && vm.kvm_run->io.size == 1 && vm.kvm_run->io.port == 0xE9 ) {
+					printf("OUT | IO port: %x, data: %d, char: %c\n", vm.kvm_run->io.port, FETCH_IO_DATA_U8, FETCH_IO_DATA_U8);
+				} else if ( vm.kvm_run->io.direction == KVM_EXIT_IO_IN && vm.kvm_run->io.size == 1 && vm.kvm_run->io.port == TERM_PORT ) {
+                    printf("IN  | IO port: %x, char: ", vm.kvm_run->io.port);
 					char data;
 
 					do {
 						data = getchar();
 					} while( data == '\n' );
 
-					char *data_in = (((char*)vm.kvm_run)+ vm.kvm_run->io.data_offset);
-					*(data_in) = data;
-				} else if ( vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.size == 4 && vm.kvm_run->io.port == 0x278 ) {
+                    STORE_IO_DATA_U8(data);
+				} else if ( vm.kvm_run->io.direction == KVM_EXIT_IO_OUT && vm.kvm_run->io.size == 4 && vm.kvm_run->io.port == FILE_PORT ) {
 					//printf("VM %d: IO port: %x, size: %d count: %d value: %x\n", args.id, vm.kvm_run->io.port, vm.kvm_run->io.size, vm.kvm_run->io.count, FETCH_IO_DATA_U32);
 					struct io_struct *params = (struct io_struct*)VM_MEM_AT(FETCH_IO_DATA_U32); 
 					switch(params->type) {
 						case OPEN: {
-							int opened = 0;
+							bool shared = false;
+							int fd;
 							for ( int i = 0; i < args.file_cnt; i++) {
 								if ( !strcmp(args.files[i], (const char*)VM_MEM_AT(params->io_open.filename)) ) {
-									if ( params->io_open.flags & O_WRONLY || params->io_open.flags & O_RDWR ) {
-										char local_copy_path[256];
-										sprintf(local_copy_path, "%s_VM%d_copy", (const char*)VM_MEM_AT(params->io_open.filename), args.id);
-										int fd = open(local_copy_path, params->io_open.flags);
-										if ( fd == -1 ) {
-											if ( copy_file((const char*)VM_MEM_AT(params->io_open.filename), local_copy_path) != 0 ) {
-												fd = open(local_copy_path, params->io_open.flags);
-											} else {
-												printf("VM %d: Error while making a local copy of a file\n", args.id);
-												stop = 1;
-											}
-										}
-										params->fd = fd;
-									} else {
-										// Possible errors will have to be handled in guest code(fd = -1)
-										int fd = open(args.files[i], params->io_open.flags | O_CREAT, 0777);
-										params->fd = fd;
+									fd = open(args.files[i], params->io_open.flags);
+									if ( fd == -1 ) {
+										printf("VM %d: Error: Shared file has to exist.", args.id);
 									}
-									opened = 1;
+									
+									sf_info[i].original_fd = fd;
+									sf_info[i].open_flags = params->io_open.flags;
+
+									shared = true;
 									break;
 								}
 							}
-							if ( opened == 0 ) {
-								printf("VM %d: Error: Access to file '%s' is denied. The file is not in the list of allowed files\n", args.id, (const char*)VM_MEM_AT(params->io_open.filename));
-								stop = 1;
+							if ( !shared ) {
+								// Not shared, open it from this vm's file system
+								GET_VM_FILE_PATH(full_path, fs_dir, (const char*)VM_MEM_AT(params->io_open.filename));
+								
+								if ( params->io_open.flags & O_RDWR || params->io_open.flags & O_WRONLY ) {
+									// If file is being opened for writing it has to breated if it already does not exist
+									fd = open(full_path, params->io_open.flags | O_CREAT, 0777);
+								} else {
+									fd = open(full_path, params->io_open.flags);
+								}
 							}
+
+							params->fd = fd;
 							break;
 						}
 						case CLOSE: {
-							if ( params->fd != -1 ) close(params->fd);
+							if ( params->fd != -1 ) { 
+								// Check if it was shared and copied and close copy as well
+								for ( int i = 0; i < args.file_cnt; i++ ) {
+									if ( sf_info[i].original_fd == params->fd ) {
+										if ( sf_info[i].copy_fd != -1 ) close(sf_info[i].copy_fd);
+										sf_info[i].original_fd = sf_info[i].copy_fd = -1;
+										break;
+									}
+								}
+
+								close(params->fd);
+							}
 							break;
 						}
 						case WRITE: {
-							ssize_t res = write(params->fd, VM_MEM_AT(params->io_rw.buffer), params->io_rw.n);
+							bool shared_copied = false;
+							ssize_t res;
+							for ( int i = 0; i < args.file_cnt; i++ ) {
+								if ( sf_info[i].original_fd == params->fd ) {
+									if ( sf_info[i].copy_fd == -1 ) {
+										// First write into share file, so we ahve to copy it(and also move file pointer if it has been moved before this)
+										// File will be unique in this vm's file system, so there's no need to mark him as copied in file name
+										GET_VM_FILE_PATH(full_path, fs_dir, args.files[i]);
+
+										sf_info[i].copy_fd = open(full_path, sf_info[i].open_flags | O_CREAT, 0777);
+
+										if ( sf_info[i].copy_fd == -1 ) {
+											printf("VM %d: Error while creating a copy of a shared file", args.id);
+											return (void*)-1;
+										}
+
+										// We have to open shared file again in case he was originaly opened without read flag
+										int temp_fd = open(args.files[i], O_RDONLY);
+
+										if ( copy_file(temp_fd, sf_info[i].copy_fd) == 0 ) {
+											printf("VM %d: Error while copying a shared file", args.id);
+											return (void*)-1;
+										}
+
+										close(temp_fd);
+
+										// Move file pointer in copy
+										off_t pt_pos = lseek(params->fd, 0, SEEK_CUR);
+										lseek(sf_info[i].copy_fd, pt_pos, SEEK_SET);
+									}
+
+									res = write(sf_info[i].copy_fd, VM_MEM_AT(params->io_rw.buffer), params->io_rw.n);
+									shared_copied = true;
+									break;
+								}
+							}
+							if ( !shared_copied ) {								
+								res = write(params->fd, VM_MEM_AT(params->io_rw.buffer), params->io_rw.n);
+							}
+
 							params->ret = res;
 							break;
 						}
 						case READ: {
-							ssize_t res = read(params->fd, VM_MEM_AT(params->io_rw.buffer), params->io_rw.n);
+							// Check if it was shared and copied and read the copy if that's the case
+							bool shared_copied = false;
+							ssize_t res;
+							for ( int i = 0; i < args.file_cnt; i++ ) {
+								if ( sf_info[i].original_fd == params->fd ) {
+									if ( sf_info[i].copy_fd != -1 ) {
+										res = read(sf_info[i].copy_fd, VM_MEM_AT(params->io_rw.buffer), params->io_rw.n);
+										shared_copied = true;	
+									} 
+									break;
+								}
+							}
+							if ( !shared_copied ) {
+								res = read(params->fd, VM_MEM_AT(params->io_rw.buffer), params->io_rw.n);
+							}
+
 							params->ret = res;
 							break;
 						}
 						case SEEK: {
-							off_t res = lseek(params->fd, params->io_seek.offset, params->io_seek.whence);
+							// Check if it was shared and copied and seek on the copy if that's the case
+							bool shared_copied = false;
+							off_t res;
+							for ( int i = 0; i < args.file_cnt; i++ ) {
+								if ( sf_info[i].original_fd == params->fd ) {
+									if ( sf_info[i].copy_fd != -1 ) {
+										res = lseek(sf_info[i].copy_fd, params->io_seek.offset, params->io_seek.whence);
+										shared_copied = true;	
+									} 
+									break;
+								}
+							}
+							if ( !shared_copied ) {
+								res = lseek(params->fd, params->io_seek.offset, params->io_seek.whence);
+							}
+
 							params->ret = res;
 							break;
 						}
@@ -376,4 +486,6 @@ void* make_vm(void* arg)
 				break;
     	}
   	}
+
+	return 0;
 }
