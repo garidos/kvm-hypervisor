@@ -112,3 +112,6 @@ char getchar() {
 	return inb(terminal_port);
 }
 
+void putchar(char c) {
+    outb(terminal_port, c);
+}

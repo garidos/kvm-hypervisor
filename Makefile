@@ -7,8 +7,8 @@ LDFLAGS = -T
 LDFILE = ./guests/guest.ld
 
 EXECUTABLE = hypervisor
-
 GUESTSDIR = ./guests
+SHARED_FILES = shared_text.txt shared_info.txt
 
 all: $(EXECUTABLE)
 
@@ -24,16 +24,21 @@ $(GUESTSDIR)/%.o: $(GUESTSDIR)/%.c
 functions.o: functions.c
 	$(CC) $(COBJFLAGS) $@ $^
 
-test_read: $(EXECUTABLE) file_rd_guest1.img file_rd_guest2.img
-	./$(EXECUTABLE) -p 2 -m 8 -g $(word 2,$^) $(word 3,$^) -f ./files/test.txt
+# two vm's access make new local files, write some text to them, read 10B out of them and write that out
+test1: $(EXECUTABLE) guestA1.img guestA2.img
+	./$(EXECUTABLE) -p 2 -m 8 -g $(word 2,$^) $(word 3,$^)
 
-test_write: $(EXECUTABLE) file_wr_guest1.img file_wr_guest2.img
-	./$(EXECUTABLE) -p 4 -m 2 -g $(word 2,$^) $(word 3,$^) -f ./files/text.txt
+# two vm's access shared files, first they write into them, and by doing that local copies are made in their file systems
+# after that they read from another shared file and write that out 
+test2: $(EXECUTABLE) guestB1.img guestB2.img
+	./$(EXECUTABLE) -p 4 --memory 2 -g $(word 2,$^) $(word 3,$^) -f $(SHARED_FILES)
 
 test: $(EXECUTABLE) guest.img
-	./$(EXECUTABLE) -p 2 -m 4 -g $(word 2,$^)
+	./$(EXECUTABLE) --page 2 -m 4 --guest $(word 2,$^)
 
-
+# remove created vm file systems
+remove_fs:
+	rm -f -r *_FS
 
 clean:
 	rm -f $(EXECUTABLE) $(GUESTSDIR)/*.o *.img ./functions.o
