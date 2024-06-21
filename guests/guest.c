@@ -1,10 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
-#include "../hypervisor.h"
-
-extern void exit();
-extern void print_nt_string(const char* str);
-extern char getchar();
+#include "../vmiolib.h"
 
 void
 __attribute__((noreturn))

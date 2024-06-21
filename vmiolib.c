@@ -1,8 +1,6 @@
-#include <stddef.h>
-#include "hypervisor.h"
 
-static const uint16_t file_port = 0x278;
-static const uint16_t terminal_port = 0xe9;
+#include "vmiolib.h"
+
 
 void  
 __attribute__((noreturn))

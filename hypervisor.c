@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <linux/limits.h>
 #include "hypervisor.h"
+#include "vmiolib.h"
 
 
 

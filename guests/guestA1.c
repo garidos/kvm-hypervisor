@@ -1,16 +1,6 @@
 #include <stddef.h>
 #include <stdint.h>
-#include "../hypervisor.h"
-
-
-int open(const char* filename, int flags);
-int close(int fd);
-ssize_t write(int fd, const void* buf, size_t count);
-ssize_t read(int fd, const void* buf, size_t count);
-off_t lseek(int fd, off_t offset, int whence);
-void putchar(char c);
-void exit();
-
+#include "../vmiolib.h"
 
 
 void
